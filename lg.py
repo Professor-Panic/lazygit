@@ -121,13 +121,17 @@ class CommitDisplay(Container):
         return []
 
     def on_mount(self) -> None:
+        self._last_commits = None
         self.call_later(self.refresh_display)
         self.set_interval(5, self.refresh_display)
 
     async def refresh_display(self):
-        await self.remove_children()
         commits = getCommits()
-        self.mount(Label(commits))
+        if commits == self._last_commits:
+            return  # nothing changed, don't touch the widget
+        self._last_commits = commits
+        await self.remove_children()
+        self.mount(Label(commits, markup=False))
 
 
 class BranchDisplay(Container):
@@ -135,14 +139,35 @@ class BranchDisplay(Container):
         return []
 
     def on_mount(self) -> None:
+        self._last_branches = None
         self.call_later(self.refresh_display)
         self.set_interval(5, self.refresh_display)
 
     async def refresh_display(self):
-        await self.remove_children()
         branches = getBranches()
-        self.mount(Label(branches))
+        if branches == self._last_branches:
+            return
+        self._last_branches = branches
+        await self.remove_children()
+        self.mount(Label(branches, markup=False))
 
+
+class StashDisplay(Container):
+    def compose(self):
+        return []
+
+    def on_mount(self) -> None:
+        self._last_stashes = None
+        self.call_later(self.refresh_display)
+        self.set_interval(5, self.refresh_display)
+
+    async def refresh_display(self):
+        stashes = getStashes()
+        if stashes == self._last_stashes:
+            return
+        self._last_stashes = stashes
+        await self.remove_children()
+        self.mount(Label(stashes or "No stashes", markup=False))
 
 class DiffDisplay(ScrollableContainer):
     diff_text = reactive("")
@@ -202,6 +227,7 @@ class FileDisplay(Container):
         yield ListView()
 
     def on_mount(self) -> None:
+        self._last_files = None
         self.call_later(self.refresh_display, force=True, focus=True)
         self.set_interval(5, self.refresh_display)
 
@@ -209,20 +235,22 @@ class FileDisplay(Container):
         list_view = self.query_one(ListView)
         has_focus = list_view.has_focus
 
-        # skip the periodic background refresh if you're not even looking at this pane
         if not force and not has_focus:
             return
+
+        files = GetFilesList()
+        if not force and files == self._last_files:
+            return  # nothing changed, skip the rebuild entirely
+        self._last_files = files
 
         selected_name = None
         if list_view.highlighted_child is not None:
             selected_name = list_view.highlighted_child.name
 
-        files = GetFilesList()
-
         await list_view.clear()
         for f in files:
             await list_view.append(
-                ListItem(Label(f"{f['staged']}{f['unstaged']} {f['filename']}"), name=f["filename"])
+                ListItem(Label(f"{f['staged']}{f['unstaged']} {f['filename']}", markup=False), name=f["filename"])
             )
 
         if focus or has_focus:
@@ -259,7 +287,6 @@ class FileDisplay(Container):
             stageFile(filename)
 
         await self.refresh_display(force=True)
-
 class StashDisplay(Container):
     def compose(self):
         return []
