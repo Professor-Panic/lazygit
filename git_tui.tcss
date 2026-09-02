@@ -1,0 +1,11 @@
+#status{
+    border: solid white;
+    width:auto;
+    height:auto;
+    padding-left: 1;
+}
+#files{
+    border: solid white;
+    max-width:20;
+    height:auto;
+}
