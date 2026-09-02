@@ -1,68 +1,238 @@
 from textual.app import App, ComposeResult
-from textual.containers import HorizontalGroup, VerticalScroll, Container
+from textual.containers import HorizontalGroup, VerticalScroll, Container, ScrollableContainer
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, Button, Digits, Label
 from textual.widgets import ListView, ListItem, Label, Input
-from git_checker import is_git_repo, GetFilesList, getBranches, getDiff, getCommits, doCommit,doCommand
+from textual.screen import ModalScreen
+from git_checker import *
+
+
+class CommitModal(ModalScreen):
+    BINDINGS = [("escape", "dismiss_modal", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("Commit message:"),
+            Input(placeholder="Type your commit message...", id="modal-commit-input"),
+            id="commit-modal-box"
+        )
+
+    def on_mount(self):
+        self.query_one("#modal-commit-input", Input).focus()
+
+    def action_dismiss_modal(self):
+        self.dismiss(None)
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+
+class CommandPaletteModal(ModalScreen):
+    BINDINGS = [
+        ("s", "select_stash", "Stash"),
+        ("b", "select_switch", "Switch branch"),
+        ("m", "select_merge", "Merge branch"),
+        ("l", "select_pull", "Pull"),
+        ("p", "select_push", "Push"),
+        ("escape", "dismiss_modal", "Cancel"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("Choose a command:"),
+            ListView(
+                ListItem(Label("s  Stash changes"), name="stash"),
+                ListItem(Label("b  Switch branch"), name="switch"),
+                ListItem(Label("m  Merge branch"), name="merge"),
+                ListItem(Label("l  Pull"), name="pull"),
+                ListItem(Label("p  Push"), name="push"),
+            ),
+            id="palette-box"
+        )
+        yield Footer()
+
+    def action_dismiss_modal(self):
+        self.dismiss(None)
+
+    def action_select_stash(self):
+        self.dismiss(("stash", None))
+
+    def action_select_switch(self):
+        self.dismiss(("need_branch", "switch"))
+
+    def action_select_merge(self):
+        self.dismiss(("need_branch", "merge"))
+
+    def action_select_pull(self):
+        self.dismiss(("pull", None))
+
+    def action_select_push(self):
+        self.dismiss(("push", None))
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        action = event.item.name
+        if action in ("switch", "merge"):
+            self.dismiss(("need_branch", action))
+        else:
+            self.dismiss((action, None))
+
+
+class BranchInputModal(ModalScreen):
+    BINDINGS = [("escape", "dismiss_modal", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("Branch name:"),
+            Input(placeholder="branch name...", id="branch-name-input"),
+            id="branch-input-box"
+        )
+
+    def on_mount(self):
+        self.query_one("#branch-name-input", Input).focus()
+
+    def action_dismiss_modal(self):
+        self.dismiss(None)
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
 
 class StatusDisplay(Container):
     is_git = reactive(False)
 
-    def _on_mount(self) -> None:
+    def on_mount(self) -> None:
+        self.check_status()
+        self.set_interval(5, self.check_status)
+
+    def check_status(self) -> None:
         self.is_git = is_git_repo()
 
     def watch_is_git(self, is_git: bool) -> None:
         """Called automatically whenever is_git changes."""
+        self.remove_children()
         if is_git:
-            self.remove_children()
             self.mount(Label("Git repo detected"))
         else:
-            self.remove_children()
             self.mount(Label("Not a git repository"))
+
 
 class CommitDisplay(Container):
     def compose(self):
         return []
 
-    async def _on_mount(self):
-        await self.refresh_display()
+    def on_mount(self) -> None:
+        self.call_later(self.refresh_display)
+        self.set_interval(5, self.refresh_display)
 
     async def refresh_display(self):
         await self.remove_children()
         commits = getCommits()
         self.mount(Label(commits))
-        self.mount(Input(placeholder="Commit message", id="commit-input"))
+
 
 class BranchDisplay(Container):
-    branches = ""
-    def _on_mount(self):
-        self.branches = getBranches()
-        self.mount(Label(self.branches))
     def compose(self):
         return []
 
-class DiffDisplay(Container):
+    def on_mount(self) -> None:
+        self.call_later(self.refresh_display)
+        self.set_interval(5, self.refresh_display)
+
+    async def refresh_display(self):
+        await self.remove_children()
+        branches = getBranches()
+        self.mount(Label(branches))
+
+
+class DiffDisplay(ScrollableContainer):
     diff_text = reactive("")
 
     def watch_diff_text(self, diff_text: str) -> None:
         self.remove_children()
-        self.mount(Label(diff_text or "No file selected"))
+        self.mount(Label(diff_text or "No change detected",markup=False))
+        self.scroll_home(animate=False)
 
-class FileDisplay(Container):
+
+class ConflictDisplay(Container):
+    BINDINGS = [
+        ("ctrl+a", "abort", "Abort merge"),
+        ("ctrl+g", "continue_merge", "Continue merge"),
+    ]
+
     def compose(self):
         return []
 
-    async def _on_mount(self):
-        await self.refresh_display()
+    def on_mount(self) -> None:
+        self.call_later(self.refresh_display)
+        self.set_interval(3, self.refresh_display)
 
     async def refresh_display(self):
         await self.remove_children()
+        if not isMergeInProgress():
+            self.mount(Label("No merge in progress"))
+            self.display = False
+            return
+
+        self.display = True
+        conflicts = getConflicts()
+        if conflicts:
+            text = "MERGE CONFLICT in:\n" + "\n".join(f"  {f}" for f in conflicts)
+            text += "\n\nResolve files, then ctrl+g to continue, ctrl+a to abort."
+        else:
+            text = "All conflicts resolved.\nPress ctrl+g to complete the merge."
+        self.mount(Label(text))
+
+    async def action_abort(self):
+        stdout, stderr, returncode = abortMerge()
+        self.app.query_one(CommandLogDisplay).log("git merge --abort", stdout, stderr, returncode)
+        await self.refresh_display()
+        await self.app.query_one(FileDisplay).refresh_display(force=True)
+
+    async def action_continue_merge(self):
+        stdout, stderr, returncode = continueMerge()
+        self.app.query_one(CommandLogDisplay).log("git commit --no-edit", stdout, stderr, returncode)
+        await self.refresh_display()
+        await self.app.query_one(FileDisplay).refresh_display(force=True)
+
+
+class FileDisplay(Container):
+    BINDINGS = [("space", "toggle_stage", "Stage/Unstage")]
+
+    def compose(self):
+        yield ListView()
+
+    def on_mount(self) -> None:
+        self.call_later(self.refresh_display, force=True, focus=True)
+        self.set_interval(5, self.refresh_display)
+
+    async def refresh_display(self, force: bool = False, focus: bool = False):
+        list_view = self.query_one(ListView)
+        has_focus = list_view.has_focus
+
+        # skip the periodic background refresh if you're not even looking at this pane
+        if not force and not has_focus:
+            return
+
+        selected_name = None
+        if list_view.highlighted_child is not None:
+            selected_name = list_view.highlighted_child.name
+
         files = GetFilesList()
-        list_items = [
-            ListItem(Label(f"{f['staged']}{f['unstaged']} {f['filename']}"), name=f["filename"])
-            for f in files
-        ]
-        self.mount(ListView(*list_items))
+
+        await list_view.clear()
+        for f in files:
+            await list_view.append(
+                ListItem(Label(f"{f['staged']}{f['unstaged']} {f['filename']}"), name=f["filename"])
+            )
+
+        if focus or has_focus:
+            list_view.focus()
+
+        if selected_name is not None:
+            for index, item in enumerate(list_view.children):
+                if item.name == selected_name:
+                    list_view.index = index
+                    break
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if event.item is None:
@@ -71,8 +241,38 @@ class FileDisplay(Container):
         diff_text = getDiff(filename)
         self.app.query_one(DiffDisplay).diff_text = diff_text
 
+    async def action_toggle_stage(self):
+        list_view = self.query_one(ListView)
+        highlighted = list_view.highlighted_child
+        if highlighted is None:
+            return
+        filename = highlighted.name
+
+        files = GetFilesList()
+        current = next((f for f in files if f["filename"] == filename), None)
+        if current is None:
+            return
+
+        if current["staged"] != " " and current["staged"] != "?":
+            unstageFile(filename)
+        else:
+            stageFile(filename)
+
+        await self.refresh_display(force=True)
+
 class StashDisplay(Container):
-    pass
+    def compose(self):
+        return []
+
+    def on_mount(self) -> None:
+        self.call_later(self.refresh_display)
+        self.set_interval(5, self.refresh_display)
+
+    async def refresh_display(self):
+        await self.remove_children()
+        stashes = getStashes()
+        self.mount(Label(stashes or "No stashes"))
+
 
 class CommandLogDisplay(Container):
     log_text = reactive("")
@@ -97,10 +297,23 @@ class CommandLogDisplay(Container):
         event.input.value = ""
         log_label = self.query_one("#log-output", Label)
         log_label.update(self.log_text)
+        self.scroll_end(animate=False)
+
+    def log(self, command_label: str, stdout: str, stderr: str, returncode: int) -> None:
+        output = stdout if returncode == 0 else f"[FAILED] {stderr}"
+        self.log_text += f"$ {command_label}\n{output}\n"
+        log_label = self.query_one("#log-output", Label)
+        log_label.update(self.log_text)
+        self.scroll_end(animate=False)
+
 
 class LazyGit(App):
     CSS_PATH = "git_tui.tcss"
-    BINDINGS = [("c", "commit", "Commit code"), ("d", "toggle_dark", "Toggle dark mode")]
+    BINDINGS = [
+        ("c", "commit", "Commit code"),
+        ("d", "toggle_dark", "Toggle dark mode"),
+        (":", "open_palette", "Commands"),
+    ]
 
     def compose(self):
         yield Header()
@@ -110,9 +323,11 @@ class LazyGit(App):
             FileDisplay(id="files"),
             BranchDisplay(id="branches"),
             CommitDisplay(id="commits"),
+            StashDisplay(id="stash"),
             id="left-column")
         yield Container(
             DiffDisplay(id="diff"),
+            ConflictDisplay(id="conflicts"),
             CommandLogDisplay(id="command-log"),
             id="right-column")
 
@@ -122,13 +337,52 @@ class LazyGit(App):
         )
 
     async def action_commit(self):
-        commit_input = self.query_one("#commit-input", Input)
-        message = commit_input.value
-        if not message:
-            return
-        doCommit(message)
-        await self.query_one(FileDisplay).refresh_display()
-        await self.query_one(CommitDisplay).refresh_display()
+        async def handle_result(message: str | None) -> None:
+            if not message:
+                return  # cancelled or empty
+            stdout, stderr, returncode = doCommit(message)
+            self.query_one(CommandLogDisplay).log(f'git commit -m "{message}"', stdout, stderr, returncode)
+            await self.query_one(FileDisplay).refresh_display()
+
+        self.push_screen(CommitModal(), handle_result)
+
+    async def action_open_palette(self):
+        async def handle_choice(result) -> None:
+            if result is None:
+                return
+            action, extra = result
+            log_display = self.query_one(CommandLogDisplay)
+
+            if action == "need_branch":
+                operation = extra  # "switch" or "merge"
+
+                async def handle_branch(branch_name: str | None) -> None:
+                    if not branch_name:
+                        return
+                    if operation == "switch":
+                        stdout, stderr, returncode = switchBranch(branch_name)
+                        log_display.log(f"git checkout {branch_name}", stdout, stderr, returncode)
+                    elif operation == "merge":
+                        stdout, stderr, returncode = doMerge(branch_name)
+                        log_display.log(f"git merge {branch_name}", stdout, stderr, returncode)
+                    await self.query_one(FileDisplay).refresh_display(force=True)
+                    await self.query_one(ConflictDisplay).refresh_display()
+
+                self.push_screen(BranchInputModal(), handle_branch)
+            elif action == "stash":
+                stdout, stderr, returncode = doStash()
+                log_display.log("git stash", stdout, stderr, returncode)
+                await self.query_one(FileDisplay).refresh_display()
+            elif action == "pull":
+                stdout, stderr, returncode = doPull()
+                log_display.log("git pull", stdout, stderr, returncode)
+                await self.query_one(FileDisplay).refresh_display()
+            elif action == "push":
+                stdout, stderr, returncode = doPush()
+                log_display.log("git push", stdout, stderr, returncode)
+
+        self.push_screen(CommandPaletteModal(), handle_choice)
+
 
 if __name__ == "__main__":
     app = LazyGit()
