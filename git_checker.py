@@ -1,5 +1,6 @@
 import os
 import subprocess
+import shlex
 def getFiles():
     result = subprocess.run(
     ["git", "status", "--porcelain"],
@@ -46,13 +47,104 @@ def getCommits():
     capture_output=True,
     text=True)
     return result.stdout
+def getStashes():
+    result = subprocess.run(
+        ["git", "stash", "list"],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout
 def doCommand(command):
-    args = command.split()
+    args = shlex.split(command)
     result = subprocess.run(
         args,
         capture_output=True,
         text=True
     )
     return result.stdout, result.stderr, result.returncode
+def stageFile(filename):
+    result = subprocess.run(
+        ["git", "add", filename],
+        capture_output=True,
+        text=True
+    )
+    return result.returncode == 0
+
+def unstageFile(filename):
+    result = subprocess.run(
+        ["git", "restore", "--staged", filename],
+        capture_output=True,
+        text=True
+    )
+    return result.returncode == 0
 def is_git_repo(path="."):
     return os.path.isdir(os.path.join(path, ".git"))
+def doStash():
+    result = subprocess.run(
+        ["git", "stash"],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
+
+def switchBranch(branch):
+    result = subprocess.run(
+        ["git", "checkout", branch],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
+
+def doMerge(branch):
+    result = subprocess.run(
+        ["git", "merge", branch],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
+
+def doPull():
+    result = subprocess.run(
+        ["git", "pull"],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
+
+def doPush():
+    result = subprocess.run(
+        ["git", "push"],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
+
+def getConflicts():
+    """Returns a list of filenames that currently have unresolved merge conflicts."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+        capture_output=True,
+        text=True
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+def isMergeInProgress(path="."):
+    """True if a merge is currently in progress and awaiting resolution."""
+    return os.path.isfile(os.path.join(path, ".git", "MERGE_HEAD"))
+
+def abortMerge():
+    result = subprocess.run(
+        ["git", "merge", "--abort"],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
+
+def continueMerge():
+    """Completes the merge after conflicts have been resolved and staged."""
+    result = subprocess.run(
+        ["git", "commit", "--no-edit"],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
