@@ -1,11 +1,49 @@
-#status{
+Screen {
+    layout: horizontal;
+}
+
+#left-column {
+    layout: vertical;
+    width: 28;
+    height: 100%;
+    overflow-y: auto;
+}
+
+#status {
     border: solid white;
-    width:auto;
-    height:auto;
+    width: 100%;
+    height: auto;
     padding-left: 1;
 }
-#files{
+
+#files {
     border: solid white;
-    max-width:20;
-    height:auto;
+    width: 100%;
+    height: 10;
+    overflow-y: auto;
+}
+
+#branches {
+    border: solid white;
+    width: 100%;
+    height: auto;
+}
+
+#commits {
+    border: solid white;
+    width: 100%;
+    height: auto;
+}
+
+#command-log {
+    border: solid white;
+    width: 100%;
+    height: 10;
+    overflow-y: auto;
+}
+
+#diff {
+    border: solid white;
+    width: 1fr;
+    height: 100%;
 }
