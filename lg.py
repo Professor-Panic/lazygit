@@ -5,7 +5,7 @@ from textual.widgets import Footer, Header, Button, Digits, Label
 from textual.widgets import ListView, ListItem, Label, Input
 from textual.screen import ModalScreen
 from git_checker import *
-
+import asyncio
 
 class CommitModal(ModalScreen):
     BINDINGS = [("escape", "dismiss_modal", "Cancel")]
@@ -367,9 +367,11 @@ class LazyGit(App):
         async def handle_result(message: str | None) -> None:
             if not message:
                 return  # cancelled or empty
-            stdout, stderr, returncode = doCommit(message)
-            self.query_one(CommandLogDisplay).log(f'git commit -m "{message}"', stdout, stderr, returncode)
-            await self.query_one(FileDisplay).refresh_display()
+            log_display = self.query_one(CommandLogDisplay)
+            log_display.log(f'git commit -m "{message}"', "Running...", "", 0)
+            stdout, stderr, returncode = await asyncio.to_thread(doCommit, message)
+            log_display.log(f'git commit -m "{message}" (done)', stdout, stderr, returncode)
+            await self.query_one(FileDisplay).refresh_display(force=True)
 
         self.push_screen(CommitModal(), handle_result)
 
@@ -387,26 +389,31 @@ class LazyGit(App):
                     if not branch_name:
                         return
                     if operation == "switch":
-                        stdout, stderr, returncode = switchBranch(branch_name)
-                        log_display.log(f"git checkout {branch_name}", stdout, stderr, returncode)
+                        log_display.log(f"git checkout {branch_name}", "Running...", "", 0)
+                        stdout, stderr, returncode = await asyncio.to_thread(switchBranch, branch_name)
+                        log_display.log(f"git checkout {branch_name} (done)", stdout, stderr, returncode)
                     elif operation == "merge":
-                        stdout, stderr, returncode = doMerge(branch_name)
-                        log_display.log(f"git merge {branch_name}", stdout, stderr, returncode)
+                        log_display.log(f"git merge {branch_name}", "Running...", "", 0)
+                        stdout, stderr, returncode = await asyncio.to_thread(doMerge, branch_name)
+                        log_display.log(f"git merge {branch_name} (done)", stdout, stderr, returncode)
                     await self.query_one(FileDisplay).refresh_display(force=True)
                     await self.query_one(ConflictDisplay).refresh_display()
 
                 self.push_screen(BranchInputModal(), handle_branch)
             elif action == "stash":
-                stdout, stderr, returncode = doStash()
-                log_display.log("git stash", stdout, stderr, returncode)
-                await self.query_one(FileDisplay).refresh_display()
+                log_display.log("git stash", "Running...", "", 0)
+                stdout, stderr, returncode = await asyncio.to_thread(doStash)
+                log_display.log("git stash (done)", stdout, stderr, returncode)
+                await self.query_one(FileDisplay).refresh_display(force=True)
             elif action == "pull":
-                stdout, stderr, returncode = doPull()
-                log_display.log("git pull", stdout, stderr, returncode)
-                await self.query_one(FileDisplay).refresh_display()
+                log_display.log("git pull", "Running...", "", 0)
+                stdout, stderr, returncode = await asyncio.to_thread(doPull)
+                log_display.log("git pull (done)", stdout, stderr, returncode)
+                await self.query_one(FileDisplay).refresh_display(force=True)
             elif action == "push":
-                stdout, stderr, returncode = doPush()
-                log_display.log("git push", stdout, stderr, returncode)
+                log_display.log("git push", "Running...", "", 0)
+                stdout, stderr, returncode = await asyncio.to_thread(doPush)
+                log_display.log("git push (done)", stdout, stderr, returncode)
 
         self.push_screen(CommandPaletteModal(), handle_choice)
 
