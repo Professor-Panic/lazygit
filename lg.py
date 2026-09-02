@@ -110,9 +110,11 @@ class LazyGit(App):
             FileDisplay(id="files"),
             BranchDisplay(id="branches"),
             CommitDisplay(id="commits"),
-            CommandLogDisplay(id="command-log"),
             id="left-column")
-        yield DiffDisplay(id="diff")
+        yield Container(
+            DiffDisplay(id="diff"),
+            CommandLogDisplay(id="command-log"),
+            id="right-column")
 
     def action_toggle_dark(self):
         self.theme = (
