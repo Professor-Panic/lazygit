@@ -64,13 +64,22 @@ def getStashes():
     )
     return result.stdout
 def doCommand(command):
-    args = shlex.split(command)
-    result = subprocess.run(
-        args,
-        capture_output=True,
-        text=True
-    )
-    return result.stdout, result.stderr, result.returncode
+    try:
+        args = shlex.split(command)
+    except ValueError as e:
+        return "", f"Could not parse command: {e}", 1
+
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True
+        )
+        return result.stdout, result.stderr, result.returncode
+    except FileNotFoundError:
+        return "", f"Command not found: {args[0]}", 127
+    except PermissionError:
+        return "", f"Permission denied: {args[0]}", 126
 def stageFile(filename):
     result = subprocess.run(
         ["git", "add", filename],

@@ -63,9 +63,20 @@ Screen {
 #command-log {
     border: solid white;
     width: 100%;
-    height: 8;
+    height: 1fr;
     overflow-y: auto;
 }
+
+#log-output {
+    height: 1fr;
+    width: 100%;
+}
+
+#command-input {
+    height: 3;
+    width: 100%;
+}
+
 CommitModal {
     align: center middle;
     background: $background 60%;

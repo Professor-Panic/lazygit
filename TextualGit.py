@@ -344,13 +344,13 @@ class CommandLogDisplay(Container):
         if not command:
             return
         stdout, stderr, returncode = doCommand(command)
-        output = stdout if returncode == 0 else stderr
-        self.log_text += f"$ {command}\n{output}\n"
         event.input.value = ""
-        self._update_log()
+        self.log(command, stdout, stderr, returncode)
 
     def log(self, command_label: str, stdout: str, stderr: str, returncode: int) -> None:
         output = stdout if returncode == 0 else f"[FAILED] {stderr}"
+        if returncode!=0:
+            self.notify(stderr,title=command_label,severity="error")
         self.log_text += f"$ {command_label}\n{output}\n"
         self._update_log()
 
