@@ -29,6 +29,7 @@ class CommitModal(ModalScreen):
 
 class CommandPaletteModal(ModalScreen):
     BINDINGS = [
+        ("space", "select_stage", "Stage all changes"),
         ("s", "select_stash", "Stash"),
         ("b", "select_switch", "Switch branch"),
         ("m", "select_merge", "Merge branch"),
@@ -41,6 +42,7 @@ class CommandPaletteModal(ModalScreen):
         yield Container(
             Label("Choose a command:"),
             ListView(
+                ListItem(Label("space  Stage all changes"), name="stage"),
                 ListItem(Label("s  Stash all changes"), name="stash"),
                 ListItem(Label("b  Switch branch"), name="switch"),
                 ListItem(Label("m  Merge branch"), name="merge"),
@@ -53,7 +55,8 @@ class CommandPaletteModal(ModalScreen):
 
     def action_dismiss_modal(self):
         self.dismiss(None)
-
+    def action_select_stage(self):
+         self.dismiss(("stage", None))
     def action_select_stash(self):
         self.dismiss(("stash", None))
 
@@ -369,7 +372,7 @@ class Repofy(App):
     ]
 
     def compose(self):
-        yield Header()
+        yield Header(show_clock=True)
         yield Footer()
         yield Container(
             StatusDisplay(id="status"),
@@ -430,6 +433,11 @@ class Repofy(App):
                 log_display.log("git stash", "Running...", "", 0)
                 stdout, stderr, returncode = await asyncio.to_thread(doStash)
                 log_display.log("git stash (done)", stdout, stderr, returncode)
+                await self.query_one(FileDisplay).refresh_display(force=True)
+            elif action == "stage":
+                log_display.log("git add .", "Running...", "", 0)
+                stdout, stderr, returncode = await asyncio.to_thread(stageAll)
+                log_display.log("git add . (done)", stdout, stderr, returncode)
                 await self.query_one(FileDisplay).refresh_display(force=True)
             elif action == "pull":
                 log_display.log("git pull", "Running...", "", 0)

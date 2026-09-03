@@ -95,6 +95,13 @@ def unstageFile(filename):
         text=True
     )
     return result.returncode == 0
+def stageAll():
+    result = subprocess.run(
+            ["git", "add", "."],
+            capture_output=True,
+            text=True
+        )
+    return result.stdout, result.stderr, result.returncode
 def is_git_repo(path="."):
     return os.path.isdir(os.path.join(path, ".git"))
 def doStash():
