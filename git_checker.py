@@ -127,7 +127,7 @@ def doPush():
         text=True
     )
     return result.stdout, result.stderr, result.returncode
-def doStash(filename):
+def doStashFile(filename):
     result = subprocess.run(
         ["git", "stash","--",filename],
         capture_output=True,

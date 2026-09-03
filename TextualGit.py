@@ -41,7 +41,7 @@ class CommandPaletteModal(ModalScreen):
         yield Container(
             Label("Choose a command:"),
             ListView(
-                ListItem(Label("s  Stash changes"), name="stash"),
+                ListItem(Label("s  Stash all changes"), name="stash"),
                 ListItem(Label("b  Switch branch"), name="switch"),
                 ListItem(Label("m  Merge branch"), name="merge"),
                 ListItem(Label("l  Pull"), name="pull"),
@@ -308,7 +308,7 @@ class FileDisplay(Container):
         filename = highlighted.name
         log_display = self.app.query_one(CommandLogDisplay)
         log_display.log(f"git stash  --{filename}", "Running...", "", 0)
-        stdout, stderr, returncode = await asyncio.to_thread(doStash, filename=filename)
+        stdout, stderr, returncode = await asyncio.to_thread(doStashFile, filename=filename)
         log_display.log(f"git stash  --{filename} (done)", stdout, stderr, returncode)
         await self.app.query_one(FileDisplay).refresh_display(force=True)
 
