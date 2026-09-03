@@ -6,6 +6,6 @@
 
 ## Tasks
 
-| # | Description | Flag | Deadline | Started | Completed |
-|---|-------------|------|----------|---------|-----------|
-| 1 | Test task   | 1    | —        | —       | —         |
+| # | Description | Flag | Deadline   | Started    | Completed |
+|---|-------------|------|------------|------------|-----------|
+| 1 | Test task   | 2    | 2026-09-15 | 2026-09-03 | —         |
