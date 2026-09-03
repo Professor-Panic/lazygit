@@ -1,11 +1,13 @@
 from textual.app import App, ComposeResult
-from textual.containers import HorizontalGroup, VerticalScroll, Container, ScrollableContainer
+from textual.containers import HorizontalGroup, VerticalScroll, Container, ScrollableContainer, Horizontal, Vertical
 from textual.reactive import reactive
 from rich.text import Text
 from textual.widgets import Footer, Header, Button, Digits, Label,TextArea
 from textual.widgets import ListView, ListItem, Label, Input
 from textual.screen import ModalScreen
+from textual.message import Message
 from git_checker import *
+from sprint_todo import SprintTodo, SprintTodoError
 import asyncio
 def build_diff_display(diff_text: str) -> Text:
     result = Text()
@@ -37,7 +39,35 @@ class CommitModal(ModalScreen):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value)
+class TodoModal(ModalScreen):
+    """Small single-input modal, styled like CommitModal. Reused for adding
+    tasks, renaming tasks, and setting deadlines by swapping the label/
+    placeholder/initial value."""
+    BINDINGS = [("escape", "dismiss_modal", "Cancel")]
 
+    def __init__(self, label: str = "TODO message:", placeholder: str = "Type your New task message...", initial: str = ""):
+        super().__init__()
+        self.label_text = label
+        self.placeholder_text = placeholder
+        self.initial_value = initial
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label(self.label_text),
+            Input(placeholder=self.placeholder_text, value=self.initial_value, id="modal-commit-input"),
+            id="todo-modal-box"
+        )
+
+    def on_mount(self):
+        field = self.query_one("#modal-commit-input", Input)
+        field.focus()
+        field.cursor_position = len(field.value)
+
+    def action_dismiss_modal(self):
+        self.dismiss(None)
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
 
 class CommandPaletteModal(ModalScreen):
     BINDINGS = [
@@ -50,6 +80,7 @@ class CommandPaletteModal(ModalScreen):
 
         ("l", "select_pull", "Pull"),
         ("p", "select_push", "Push"),
+        ("t", "select_task_board", "Sprint board"),
         ("escape", "dismiss_modal", "Cancel"),
     ]
 
@@ -65,6 +96,7 @@ class CommandPaletteModal(ModalScreen):
                 ListItem(Label("d  Delete branch"), name="delete"),
                 ListItem(Label("l  Pull"), name="pull"),
                 ListItem(Label("p  Push"), name="push"),
+                ListItem(Label("t  Sprint board"), name="taskboard"),
             ),
             id="palette-box"
         )
@@ -76,6 +108,8 @@ class CommandPaletteModal(ModalScreen):
          self.dismiss(("stage", None))
     def action_select_stash(self):
         self.dismiss(("stash", None))
+    def action_select_task_board(self):
+        self.dismiss(("taskboard", None))
 
     def action_select_switch(self):
         self.dismiss(("need_branch", "switch"))
@@ -118,7 +152,416 @@ class BranchInputModal(ModalScreen):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value)
+class BranchSelectModal(ModalScreen):
+    """Modal to choose which remote branch should be treated as the main
+    branch for the sprint TODO."""
 
+    BINDINGS = [("escape", "dismiss_modal", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("Select the main branch for the sprint TODO:"),
+            ListView(id="branch-select-list"),
+            id="branch-select-box",
+        )
+
+    async def on_mount(self) -> None:
+        list_view = self.query_one("#branch-select-list", ListView)
+        await list_view.clear()
+        # Get remote branches (e.g., origin/main, origin/master, ...)
+        try:
+            result = subprocess.run(
+                ["git", "branch", "-r", "--format=%(refname:short)"],
+                capture_output=True, text=True, check=True
+            )
+            branches = [b.strip() for b in result.stdout.splitlines() if b.strip()]
+        except subprocess.CalledProcessError:
+            branches = []
+        for branch in branches:
+            # Remove the leading "origin/" for display and value
+            if branch.startswith("origin/"):
+                name = branch[len("origin/"):]
+            else:
+                name = branch
+            await list_view.append(ListItem(Label(name, markup=False), name=name))
+        list_view.focus()
+
+    def action_dismiss_modal(self):
+        self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.dismiss(event.item.name)
+
+class TaskItem(ListItem):
+    """One task card on the sprint board. Right-click deletes it."""
+
+    class DeleteRequested(Message):
+        def __init__(self, task_num: int) -> None:
+            self.task_num = task_num
+            super().__init__()
+
+    def __init__(self, task: dict):
+        self.task_num = task["num"]
+        text = f"#{task['num']} {task['description']}"
+        if task.get("deadline"):
+            text += f"  ⏰ {task['deadline']}"
+        super().__init__(Label(text, markup=False), name=str(task["num"]))
+
+    def on_click(self, event) -> None:
+        if getattr(event, "button", 1) == 3:
+            event.stop()
+            self.post_message(self.DeleteRequested(self.task_num))
+
+
+class SprintBoardModal(ModalScreen):
+    """Jira-style sprint board. Columns are the SprintTodo indices, cards
+    are tasks. Bindings work on whichever column ListView has focus."""
+
+    BINDINGS = [
+        ("escape", "dismiss_modal", "Close"),
+        ("a", "add_task", "Add task"),
+        ("d", "delete_task", "Delete task"),
+        ("r", "rename_task", "Rename task"),
+        ("e", "set_deadline", "Set deadline"),
+        ("h", "move_left", "Move ←"),
+        ("l", "move_right", "Move →"),
+        ("ctrl+r", "refresh_board", "Refresh"),
+        ("i", "add_index", "Add index"),
+        ("n", "rename_index", "Rename index"),
+        ("x", "delete_index", "Delete index"),
+        ("s", "toggle_help", "Show/hide help"),
+        ("ctrl+s", "save_changes", "Push changes now"),
+    ]
+
+    def __init__(self, todo: "SprintTodo"):
+        super().__init__()
+        self.todo = todo
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("Sprint board", id="sprint-title"),
+            Horizontal(id="board-columns"),
+            # Help popup – initially hidden
+            VerticalScroll(
+                Label(
+                    "Key Bindings:\n"
+                    "  a         Add task\n"
+                    "  d         Delete task\n"
+                    "  r         Rename task\n"
+                    "  e         Set deadline\n"
+                    "  h / l     Move task left/right\n"
+                    "  i         Add index\n"
+                    "  n         Rename index\n"
+                    "  x         Delete index\n"
+                    "  ctrl+r    Refresh from remote\n"
+                    "  ctrl+s    Push changes now\n"
+                    "  s         Toggle this help\n"
+                    "  escape    Close (and push)\n",
+                    id="help-text",
+                ),
+                id="help-popup",
+                classes="hidden",
+            ),
+            Horizontal(
+                Button("+ Add Task", id="add-task-btn", variant="primary"),
+                Button("Close", id="close-btn"),
+                id="sprint-actions",
+            ),
+            id="sprint-board-box",
+        )
+
+    async def on_mount(self) -> None:
+        try:
+            await asyncio.to_thread(self.todo.pull)
+        except SprintTodoError as e:
+            self.notify(str(e), title="Sprint board", severity="error")
+        await self.refresh_board(focus_first=True)
+        # Ensure help popup is hidden initially
+        self.query_one("#help-popup").display = False
+
+    # ---------------- board rendering ----------------
+
+    async def refresh_board(self, focus_first: bool = False) -> None:
+        columns = self.query_one("#board-columns", Horizontal)
+
+        focused_flag = self._current_flag()
+        focused_task = self._current_task_num()
+
+        await columns.remove_children()
+
+        if not self.todo.indices:
+            await columns.mount(Label("No indices found in this sprint TODO yet."))
+            return
+
+        for num in sorted(self.todo.indices):
+            name = self.todo.indices[num]
+            tasks = sorted(
+                (t for t in self.todo.tasks if t["flag"] == num),
+                key=lambda t: t["num"],
+            )
+            col = Vertical(id=f"col-{num}", classes="sprint-column")
+            await columns.mount(col)
+            await col.mount(Label(f"{name} ({len(tasks)})", classes="column-header"))
+            list_view = ListView(id=f"list-{num}")
+            await col.mount(list_view)
+            for t in tasks:
+                await list_view.append(TaskItem(t))
+        target_flag = focused_flag if focused_flag in self.todo.indices else (
+            min(self.todo.indices) if focus_first else None
+        )
+
+        if target_flag is not None:
+            list_view = self.query_one(f"#list-{target_flag}", ListView)
+            list_view.focus()
+            if focused_task is not None:
+                for i, item in enumerate(list_view.children):
+                    if item.name == str(focused_task):
+                        list_view.index = i
+                        break
+
+    # ---------------- focus helpers ----------------
+
+    def _current_list_view(self):
+        focused = self.app.focused
+        return focused if isinstance(focused, ListView) else None
+
+    def _current_flag(self):
+        lv = self._current_list_view()
+        if lv is None or not lv.id:
+            return None
+        try:
+            return int(lv.id.split("-", 1)[1])
+        except (IndexError, ValueError):
+            return None
+
+    def _current_task_num(self):
+        lv = self._current_list_view()
+        if lv is None or lv.highlighted_child is None:
+            return None
+        return int(lv.highlighted_child.name)
+
+    # ---------------- new / modified actions ----------------
+
+    async def action_toggle_help(self) -> None:
+        """Toggle the help popup visibility."""
+        help_popup = self.query_one("#help-popup")
+        help_popup.display = not help_popup.display
+
+    async def action_save_changes(self) -> None:
+        """Push all pending changes without closing the board."""
+        await self._push_changes()
+
+    async def _push_changes(self) -> None:
+        """Push if there are recorded operations."""
+        if self.todo.has_pending_changes:
+            try:
+                await asyncio.to_thread(self.todo.push, "Update sprint TODO")
+                self.notify("Changes pushed", title="Sprint board", severity="information")
+            except SprintTodoError as e:
+                self.notify(str(e), title="Push failed", severity="error")
+        else:
+            self.notify("No changes to push", title="Sprint board", severity="information")
+
+    async def action_dismiss_modal(self) -> None:
+        if self.app.screen is self:
+            self.dismiss(None)
+
+    # Override the button handler to also push before closing
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "add-task-btn":
+            await self.action_add_task()
+        elif event.button.id == "close-btn":
+            await self._push_changes()
+            # Only dismiss if the screen is still active (on top of stack)
+            if self.app.screen is self:
+                self.dismiss(None)
+
+    # ---------------- task/index actions (no direct push) ----------------
+
+    async def action_add_task(self):
+        if not self.todo.indices:
+            self.notify(
+                "No indices defined. Add an index first (e.g. via CLI).",
+                title="Sprint board",
+                severity="warning",
+            )
+            return
+        flag = self._current_flag() or min(self.todo.indices)
+
+        async def handle(description):
+            if not description:
+                return
+            try:
+                await asyncio.to_thread(self.todo.add_task, description, flag)
+            except SprintTodoError as e:
+                self.notify(str(e), title="Add task", severity="error")
+            await self.refresh_board()
+
+        self.app.push_screen(
+            TodoModal(label="New task:", placeholder="Task description..."), handle
+        )
+
+    async def action_delete_task(self):
+        num = self._current_task_num()
+        if num is None:
+            return
+        await self._delete_task(num)
+
+    async def _delete_task(self, num: int):
+        try:
+            await asyncio.to_thread(self.todo.delete_task, num)
+        except SprintTodoError as e:
+            self.notify(str(e), title="Delete task", severity="error")
+        await self.refresh_board()
+
+    def on_task_item_delete_requested(self, message: "TaskItem.DeleteRequested") -> None:
+        self.run_worker(self._delete_task(message.task_num))
+
+    async def action_rename_task(self):
+        num = self._current_task_num()
+        if num is None:
+            return
+        task = next((t for t in self.todo.tasks if t["num"] == num), None)
+
+        async def handle(description):
+            if not description:
+                return
+            try:
+                await asyncio.to_thread(self.todo.rename_task, num, description)
+            except SprintTodoError as e:
+                self.notify(str(e), title="Rename task", severity="error")
+            await self.refresh_board()
+
+        self.app.push_screen(
+            TodoModal(
+                label="New description:",
+                placeholder="Edit task description...",
+                initial=task["description"] if task else "",
+            ),
+            handle,
+        )
+
+    async def action_set_deadline(self):
+        num = self._current_task_num()
+        if num is None:
+            return
+        task = next((t for t in self.todo.tasks if t["num"] == num), None)
+
+        async def handle(value):
+            if value is None:
+                return
+            try:
+                await asyncio.to_thread(self.todo.set_deadline, num, value or None)
+            except SprintTodoError as e:
+                self.notify(str(e), title="Set deadline", severity="error")
+            await self.refresh_board()
+
+        self.app.push_screen(
+            TodoModal(
+                label="Deadline (YYYY-MM-DD, blank to clear):",
+                placeholder="2026-09-15",
+                initial=(task["deadline"] or "") if task else "",
+            ),
+            handle,
+        )
+
+    async def action_move_left(self):
+        await self._move_task(-1)
+
+    async def action_move_right(self):
+        await self._move_task(1)
+
+    async def _move_task(self, direction: int):
+        num = self._current_task_num()
+        flag = self._current_flag()
+        if num is None or flag is None:
+            return
+        indices = sorted(self.todo.indices)
+        pos = indices.index(flag)
+        new_pos = pos + direction
+        if not (0 <= new_pos < len(indices)):
+            return
+        new_flag = indices[new_pos]
+        try:
+            await asyncio.to_thread(self.todo.set_flag, num, new_flag)
+        except SprintTodoError as e:
+            self.notify(str(e), title="Move task", severity="error")
+            await self.refresh_board()
+            return
+        await self.refresh_board()
+        # Follow the moved card into its new column rather than leaving
+        # focus behind in the old one.
+        try:
+            new_list = self.query_one(f"#list-{new_flag}", ListView)
+        except Exception:
+            return
+        new_list.focus()
+        for i, item in enumerate(new_list.children):
+            if item.name == str(num):
+                new_list.index = i
+                break
+
+    async def action_add_index(self):
+        """Prompt for a new index name and add it at the end."""
+        async def handle(name):
+            if not name:
+                return
+            try:
+                await asyncio.to_thread(self.todo.add_index, name)
+            except SprintTodoError as e:
+                self.notify(str(e), title="Add index", severity="error")
+            await self.refresh_board()
+
+        self.app.push_screen(
+            TodoModal(label="New index name:", placeholder="e.g. Backlog"), handle
+        )
+
+    async def action_rename_index(self):
+        """Rename the index of the currently focused column."""
+        flag = self._current_flag()
+        if flag is None:
+            self.notify("Focus a column first.", title="Rename index", severity="warning")
+            return
+        current_name = self.todo.indices.get(flag, "")
+
+        async def handle(new_name):
+            if not new_name:
+                return
+            try:
+                await asyncio.to_thread(self.todo.rename_index, flag, new_name)
+            except SprintTodoError as e:
+                self.notify(str(e), title="Rename index", severity="error")
+            await self.refresh_board()
+
+        self.app.push_screen(
+            TodoModal(
+                label=f"Rename index '{current_name}' to:",
+                placeholder="New index name...",
+                initial=current_name,
+            ),
+            handle,
+        )
+
+    async def action_delete_index(self):
+        """Delete the index of the currently focused column if it has no tasks."""
+        flag = self._current_flag()
+        if flag is None:
+            self.notify("Focus a column first.", title="Delete index", severity="warning")
+            return
+        tasks_using = [t for t in self.todo.tasks if t["flag"] == flag]
+        if tasks_using:
+            self.notify(
+                f"Index {flag} has {len(tasks_using)} task(s). Reassign them first via CLI.",
+                title="Delete index",
+                severity="error",
+            )
+            return
+
+        try:
+            await asyncio.to_thread(self.todo.delete_index, flag)
+        except SprintTodoError as e:
+            self.notify(str(e), title="Delete index", severity="error")
+        await self.refresh_board()
 
 class StatusDisplay(Container):
     is_git = reactive(False)
@@ -396,9 +839,14 @@ class Repofy(App):
     BINDINGS = [
         ("c", "commit", "Commit code"),
         ("d", "toggle_dark", "Toggle dark mode"),
+        ("t", "open_sprint_board", "Sprint board"),
         (":", "open_palette", "Commands"),
         ("ctrl+x", "quit", "Quit"),
     ]
+
+    def __init__(self):
+        super().__init__()
+        self.todo = SprintTodo()
 
     def compose(self):
         yield Header(show_clock=True)
@@ -432,6 +880,18 @@ class Repofy(App):
             await self.query_one(FileDisplay).refresh_display(force=True)
 
         self.push_screen(CommitModal(), handle_result)
+
+    async def action_open_sprint_board(self):
+        if self.todo.main_branch is None:
+            # Need user to select the main branch first
+            async def handle_branch(branch: str | None) -> None:
+                if branch:
+                    self.todo.set_main_branch(branch)
+                    self.push_screen(SprintBoardModal(self.todo))
+                # else: cancelled, do nothing
+            self.push_screen(BranchSelectModal(), handle_branch)
+        else:
+            self.push_screen(SprintBoardModal(self.todo))
 
     async def action_open_palette(self):
         async def handle_choice(result) -> None:
@@ -485,6 +945,8 @@ class Repofy(App):
                 log_display.log("git push", "Running...", "", 0)
                 stdout, stderr, returncode = await asyncio.to_thread(doPush)
                 log_display.log("git push (done)", stdout, stderr, returncode)
+            elif action == "taskboard":
+                self.push_screen(SprintBoardModal(self.todo))
 
         self.push_screen(CommandPaletteModal(), handle_choice)
 
