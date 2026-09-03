@@ -85,7 +85,7 @@ class SprintTodo:
     def _git(self, *args, input=None, env=None):
         full_env = {**os.environ, **(env or {})}
         result = subprocess.run(
-            ["git", *args], cwd=self.repo_dir, capture_output=True, text=True,
+            ["git", *args], cwd=self.repo_dir,encoding="utf-8",capture_output=True, text=True,
             input=input, env=full_env,
         )
         if result.returncode != 0:
@@ -114,7 +114,7 @@ class SprintTodo:
 
     def _sync_state_from_remote(self):
         """Fetch remote branch and reload self.indices/self.tasks from just
-        this file's blob there. Sets self._base_sha. Clears pending ops."""
+        this file's blob there.Clears pending ops too."""
         self._fetch_remote_branch()
         remote_ref = f"origin/{self.main_branch}"
         self._base_sha = self._rev_parse(remote_ref)
@@ -123,10 +123,6 @@ class SprintTodo:
         self._pending_ops = []
 
     def _build_commit(self, message):
-        """Build (but don't push) a commit on top of self._base_sha that
-        updates only self.relpath to the current in-memory content. Uses a
-        throwaway index file so the real index/working tree are untouched.
-        Returns the new commit sha."""
         content = self._render_text()
         blob_sha = self._git("hash-object", "-w", "--stdin", input=content)
 
@@ -151,8 +147,6 @@ class SprintTodo:
         return self._git(*commit_args)
 
     def _push_commit(self, commit_sha):
-        """Try to fast-forward origin/main_branch to commit_sha. Returns True on
-        success, False on a rejection (conflict) that's worth retrying."""
         try:
             self._git("push", "origin", f"{commit_sha}:refs/heads/{self.main_branch}")
             return True
@@ -164,24 +158,17 @@ class SprintTodo:
     # ---------------- public sync API ----------------
 
     def pull(self):
-        """Fetch just this file's latest content from the remote main branch into memory."""
+        """Fetch te file's latest content from the remote main branch into memory."""
         if not self.main_branch:
             raise SprintTodoError("Main branch not set. Use set_main_branch() first.")
         self._sync_state_from_remote()
 
     def push(self, message="Update sprint TODO", max_retries=5):
-        """Commit current in-memory state as an update to just this file on
-        the remote main branch. On a non-fast-forward rejection (a concurrent
-        writer got there first), re-fetches, reloads fresh state, replays the
-        operations applied since the last pull/push, and retries."""
         if not self.main_branch:
             raise SprintTodoError("Main branch not set. Use set_main_branch() first.")
 
         if self._base_sha is None and self._rev_parse(f"origin/{self.main_branch}") is not None:
-            # We were never pulled against a real base; get one now.
             self._sync_state_from_remote()
-            # Note: this discards any in-memory-only edits made before the
-            # first pull(), same as the old pull-first contract required.
 
         for attempt in range(max_retries + 1):
             commit_sha = self._build_commit(message)
@@ -272,8 +259,6 @@ class SprintTodo:
         out += [fmt_row(row) for row in rows]
         return out
 
-    # ---------------- index CRUD (each records itself for retry-replay) ----------------
-
     def add_index(self, name, position=None):
         self._record("add_index", (name,), {"position": position})
         self._apply_add_index(name, position)
@@ -319,9 +304,6 @@ class SprintTodo:
         if index_num not in self.indices:
             raise SprintTodoError(f"No such index: {index_num}")
         self.indices[index_num] = new_name
-
-    # ---------------- task CRUD (each records itself for retry-replay) ----------------
-
     def _next_task_num(self):
         return max((t["num"] for t in self.tasks), default=0) + 1
 
@@ -381,9 +363,6 @@ class SprintTodo:
 
     def _apply_set_deadline(self, task_num, deadline):
         self._get_task(task_num)["deadline"] = deadline
-
-
-# ---------------- CLI ----------------
 
 def _build_parser():
     p = argparse.ArgumentParser(description="Manage a git-synced sprint TODO.md")
