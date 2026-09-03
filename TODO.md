@@ -1,6 +1,7 @@
 ## Indices
 
 1. Backlog
+2. In progress
 
 ## Tasks
 
