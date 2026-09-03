@@ -1,7 +1,7 @@
 from textual.app import App, ComposeResult
 from textual.containers import HorizontalGroup, VerticalScroll, Container, ScrollableContainer
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Button, Digits, Label
+from textual.widgets import Footer, Header, Button, Digits, Label,TextArea
 from textual.widgets import ListView, ListItem, Label, Input
 from textual.screen import ModalScreen
 from git_checker import *
@@ -331,12 +331,11 @@ class CommandLogDisplay(Container):
     log_text = reactive("")
 
     def compose(self):
-        return []
+        yield TextArea("", read_only=True, id="log-output")
+        yield Input(placeholder="Run a command (e.g. git status)", id="command-input")
 
-    async def _on_mount(self):
-        await self.remove_children()
-        self.mount(Label(self.log_text, id="log-output"))
-        self.mount(Input(placeholder="Run a command (e.g. git status)", id="command-input"))
+    def on_mount(self):
+        pass  # nothing async needed now, widgets built in compose
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command-input":
@@ -348,19 +347,17 @@ class CommandLogDisplay(Container):
         output = stdout if returncode == 0 else stderr
         self.log_text += f"$ {command}\n{output}\n"
         event.input.value = ""
-        log_label = self.query_one("#log-output", Label)
-        log_label.update(self.log_text)
-        self.scroll_end(animate=False)
-    #
-    def log(self, command_label: str, stdout: str, stderr: str, returncode: int) -> None:
-        #set the logs output to be either the return string or the err when it fails
-        output = stdout if returncode == 0 else f"[FAILED] {stderr}"
-        #Add the command and the output to log text
-        self.log_text += f"$ {command_label}\n{output}\n"
-        log_label = self.query_one("#log-output", Label)
-        log_label.update(self.log_text)
-        self.scroll_end(animate=False)
+        self._update_log()
 
+    def log(self, command_label: str, stdout: str, stderr: str, returncode: int) -> None:
+        output = stdout if returncode == 0 else f"[FAILED] {stderr}"
+        self.log_text += f"$ {command_label}\n{output}\n"
+        self._update_log()
+
+    def _update_log(self):
+        log_area = self.query_one("#log-output", TextArea)
+        log_area.load_text(self.log_text)
+        log_area.scroll_end(animate=False)
 
 class Repofy(App):
     CSS_PATH = "git_tui.tcss"
