@@ -22,12 +22,21 @@ def GetFilesList():
             "unstaged": unstaged_status,
         })
     return files
+
 def getBranches():
     result= subprocess.run(
     ["git", "branch"],
     capture_output=True,
     text=True)
     return result.stdout
+def GetBranchesList():
+    output=getBranches()
+    branches=[]
+    for line in output.splitlines():
+        if not line:
+            continue
+        branches.append(line)
+    return branches
 def getDiff(filename):
     result= subprocess.run(
     ["git", "diff",filename],
@@ -118,7 +127,13 @@ def doPush():
         text=True
     )
     return result.stdout, result.stderr, result.returncode
-
+def doStash(filename):
+    result = subprocess.run(
+        ["git", "stash","--",filename],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
 def getConflicts():
     """Returns a list of filenames that currently have unresolved merge conflicts."""
     result = subprocess.run(
