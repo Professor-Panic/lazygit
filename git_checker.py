@@ -206,3 +206,6 @@ def getCommitsList():
         h, _, subject = line.partition("|")
         commits.append({"hash": h, "line": f"{h}  {subject}"})
     return commits
+def getCommitDiff(commit_hash):
+    result = subprocess.run(["git", "show", commit_hash], capture_output=True, text=True)
+    return result.stdout

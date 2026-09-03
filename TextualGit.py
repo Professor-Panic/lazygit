@@ -1,12 +1,24 @@
 from textual.app import App, ComposeResult
 from textual.containers import HorizontalGroup, VerticalScroll, Container, ScrollableContainer
 from textual.reactive import reactive
+from rich.text import Text
 from textual.widgets import Footer, Header, Button, Digits, Label,TextArea
 from textual.widgets import ListView, ListItem, Label, Input
 from textual.screen import ModalScreen
 from git_checker import *
 import asyncio
-
+def build_diff_display(diff_text: str) -> Text:
+    result = Text()
+    for line in diff_text.splitlines(keepends=True):
+        if line.startswith("+") and not line.startswith("+++"):
+            result.append(line, style="green")
+        elif line.startswith("-") and not line.startswith("---"):
+            result.append(line, style="red")
+        elif line.startswith("@@"):
+            result.append(line, style="cyan")
+        else:
+            result.append(line)
+    return result
 class CommitModal(ModalScreen):
     BINDINGS = [("escape", "dismiss_modal", "Cancel")]
 
@@ -135,7 +147,11 @@ class CommitDisplay(Container):
         self._last_commits = None
         self.call_later(self.refresh_display)
         self.set_interval(5, self.refresh_display)
-
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item is None:
+            return
+        diff_text = getCommitDiff(event.item.name)
+        self.app.query_one(DiffDisplay).diff_text = diff_text
     async def refresh_display(self):
         commits = getCommitsList()
         if commits == self._last_commits:
@@ -204,10 +220,11 @@ class DiffDisplay(ScrollableContainer):
 
     def watch_diff_text(self, diff_text: str) -> None:
         self.remove_children()
-        self.mount(Label(diff_text or "No change detected",markup=False))
+        if diff_text:
+            self.mount(Label(build_diff_display(diff_text)))
+        else:
+            self.mount(Label("No change detected"))
         self.scroll_home(animate=False)
-
-
 class ConflictDisplay(Container):
     BINDINGS = [
         ("ctrl+a", "abort", "Abort merge"),
