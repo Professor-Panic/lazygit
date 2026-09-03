@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-sprint_todo.py — Manage a markdown-table sprint TODO file, synced directly
-with a configurable main branch via git plumbing.
-
-The main branch can be set explicitly with `set_main_branch()`, or it is
-auto-detected (main, then master) and saved locally. If neither exists,
-you must call `set_main_branch()` (or use the TUI to select it) before
-any pull/push.
-"""
-
 import argparse
 import os
 import re
