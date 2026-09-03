@@ -179,3 +179,30 @@ def continueMerge():
         text=True
     )
     return result.stdout, result.stderr, result.returncode
+def createBranch(branch):
+    result = subprocess.run(
+            ["git", "checkout", "-b",branch],
+            capture_output=True,
+            text=True
+        )
+    return result.stdout, result.stderr, result.returncode
+def deleteBranch(branch):
+    result = subprocess.run(
+            ["git", "branch", "-d",branch],
+            capture_output=True,
+            text=True
+        )
+    return result.stdout, result.stderr, result.returncode
+def getCommitsList():
+    result = subprocess.run(
+        ["git", "log", "--pretty=format:%h|%s"],
+        capture_output=True,
+        text=True
+    )
+    commits = []
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        h, _, subject = line.partition("|")
+        commits.append({"hash": h, "line": f"{h}  {subject}"})
+    return commits

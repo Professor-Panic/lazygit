@@ -33,6 +33,9 @@ class CommandPaletteModal(ModalScreen):
         ("s", "select_stash", "Stash"),
         ("b", "select_switch", "Switch branch"),
         ("m", "select_merge", "Merge branch"),
+        ("c", "create_branch", "Create branch"),
+        ("d", "delete_branch", "Delete branch"),
+
         ("l", "select_pull", "Pull"),
         ("p", "select_push", "Push"),
         ("escape", "dismiss_modal", "Cancel"),
@@ -46,6 +49,8 @@ class CommandPaletteModal(ModalScreen):
                 ListItem(Label("s  Stash all changes"), name="stash"),
                 ListItem(Label("b  Switch branch"), name="switch"),
                 ListItem(Label("m  Merge branch"), name="merge"),
+                ListItem(Label("c  Create branch"), name="create"),
+                ListItem(Label("d  Delete branch"), name="delete"),
                 ListItem(Label("l  Pull"), name="pull"),
                 ListItem(Label("p  Push"), name="push"),
             ),
@@ -65,7 +70,10 @@ class CommandPaletteModal(ModalScreen):
 
     def action_select_merge(self):
         self.dismiss(("need_branch", "merge"))
-
+    def action_create_branch(self):
+        self.dismiss(("need_branch","create"))
+    def action_delete_branch(self):
+        self.dismiss(("need_branch","delete"))
     def action_select_pull(self):
         self.dismiss(("pull", None))
 
@@ -74,7 +82,7 @@ class CommandPaletteModal(ModalScreen):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         action = event.item.name
-        if action in ("switch", "merge"):
+        if action in ("switch", "merge","create","delete"):
             self.dismiss(("need_branch", action))
         else:
             self.dismiss((action, None))
@@ -121,7 +129,7 @@ class StatusDisplay(Container):
 
 class CommitDisplay(Container):
     def compose(self):
-        return []
+        yield ListView(id="Commit-list")
 
     def on_mount(self) -> None:
         self._last_commits = None
@@ -129,12 +137,16 @@ class CommitDisplay(Container):
         self.set_interval(5, self.refresh_display)
 
     async def refresh_display(self):
-        commits = getCommits()
+        commits = getCommitsList()
         if commits == self._last_commits:
-            return  # nothing changed, don't touch the widget
+            return
         self._last_commits = commits
-        await self.remove_children()
-        self.mount(Label(commits, markup=False))
+        list_view = self.query_one("#Commit-list", ListView)
+        await list_view.clear()
+        for c in commits:
+            await list_view.append(
+                ListItem(Label(c["line"], markup=False), name=c["hash"])
+            )
 
 
 class BranchDisplay(Container):
@@ -425,6 +437,14 @@ class Repofy(App):
                         log_display.log(f"git merge {branch_name}", "Running...", "", 0)
                         stdout, stderr, returncode = await asyncio.to_thread(doMerge, branch_name)
                         log_display.log(f"git merge {branch_name} (done)", stdout, stderr, returncode)
+                    elif operation == "create":
+                        log_display.log(f"git checkout -b {branch_name}", "Running...", "", 0)
+                        stdout, stderr, returncode = await asyncio.to_thread(createBranch, branch_name)
+                        log_display.log(f"git checkout -b {branch_name} (done)", stdout, stderr, returncode)
+                    elif operation == "delete":
+                        log_display.log(f"git branch -d {branch_name}", "Running...", "", 0)
+                        stdout, stderr, returncode = await asyncio.to_thread(deleteBranch, branch_name)
+                        log_display.log(f"git branch -d {branch_name} (done)", stdout, stderr, returncode)
                     await self.query_one(FileDisplay).refresh_display(force=True)
                     await self.query_one(ConflictDisplay).refresh_display()
 
