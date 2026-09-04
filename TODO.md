@@ -3,7 +3,6 @@
 1. Backlog
 2. In progress
 3. Done
-4. Review
 
 ## Tasks
 
