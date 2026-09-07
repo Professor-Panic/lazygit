@@ -135,7 +135,13 @@ def doPull():
         text=True
     )
     return result.stdout, result.stderr, result.returncode
-
+def doFetch():
+    result = subprocess.run(
+        ["git", "fetch"],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout, result.stderr, result.returncode
 def doPush():
     result = subprocess.run(
         ["git", "push"],

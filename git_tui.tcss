@@ -157,7 +157,7 @@ SprintBoardModal {
 /* Columns are all equal width (set dynamically in Python) and fill height */
 .sprint-column {
     layout: vertical;
-    width: 50;             /* fallback, overridden in refresh_board */
+    width: 30;             /* fallback, overridden in refresh_board */
     min-width: 25;
     height: 1fr;           /* fill parent height */
     border: solid white;

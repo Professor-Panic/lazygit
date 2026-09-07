@@ -204,7 +204,7 @@ class TaskItem(ListItem):
         self.task_num = task["num"]
         text = f"#{task['num']} {task['description']}"
         if task.get("deadline"):
-            text += f"  ⏰ {task['deadline']}"
+            text += f" {task['deadline']}"
         super().__init__(Label(text, markup=False), name=str(task["num"]))
 
     def on_click(self, event) -> None:
@@ -214,9 +214,6 @@ class TaskItem(ListItem):
 
 
 class SprintBoardModal(ModalScreen):
-    """Jira-style sprint board. Columns are the SprintTodo indices, cards
-    are tasks. Bindings work on whichever column ListView has focus."""
-
     BINDINGS = [
         ("escape", "dismiss_modal", "Close"),
         ("a", "add_task", "Add task"),
@@ -838,6 +835,9 @@ class Repofy(App):
     CSS_PATH = "git_tui.tcss"
     BINDINGS = [
         ("c", "commit", "Commit code"),
+        ("p","push","Push code"),
+        ("l","pull","Pull code"),
+        ("ctrl+s","stage_all","Stage all changes"),
         ("d", "toggle_dark", "Toggle dark mode"),
         ("t", "open_sprint_board", "Sprint board"),
         (":", "open_palette", "Commands"),
@@ -880,7 +880,24 @@ class Repofy(App):
             await self.query_one(FileDisplay).refresh_display(force=True)
 
         self.push_screen(CommitModal(), handle_result)
-
+    async def action_push(self):
+        log_display = self.query_one(CommandLogDisplay)
+        log_display.log(f'git push', "Running...", "", 0)
+        stdout, stderr, returncode = await asyncio.to_thread(doPush)
+        log_display.log(f'git push" (done)', stdout, stderr, returncode)
+        await self.query_one(FileDisplay).refresh_display(force=True)
+    async def action_pull(self):
+        log_display = self.query_one(CommandLogDisplay)
+        log_display.log(f'git pull', "Running...", "", 0)
+        stdout, stderr, returncode = await asyncio.to_thread(doPull)
+        log_display.log(f'git pull" (done)', stdout, stderr, returncode)
+        await self.query_one(FileDisplay).refresh_display(force=True)
+    async def action_stage_all(self):
+        log_display = self.query_one(CommandLogDisplay)
+        log_display.log(f'git add .', "Running...", "", 0)
+        stdout, stderr, returncode = await asyncio.to_thread(stageAll)
+        log_display.log(f'git add ." (done)', stdout, stderr, returncode)
+        await self.query_one(FileDisplay).refresh_display(force=True)
     async def action_open_sprint_board(self):
         if self.todo.main_branch is None:
             # Need user to select the main branch first
