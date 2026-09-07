@@ -111,6 +111,48 @@ CommandPaletteModal, BranchInputModal {
     background: $background 60%;
 }
 
+FilePickerModal {
+    align: center middle;
+    background: $background 60%;
+}
+
+#file-picker-box {
+    width: 70;
+    height: 80%;
+    border: solid white;
+    padding: 1 2;
+    background: $surface;
+    layout: vertical;
+}
+
+#file-picker-title {
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+#file-picker-path {
+    color: $accent;
+    height: 1;
+}
+
+#file-picker-filter {
+    margin: 1 0;
+}
+
+#file-picker-list {
+    height: 1fr;
+    border: none;
+}
+
+#file-picker-command {
+    margin-top: 1;
+}
+
+#file-picker-status {
+    height: auto;
+    color: $text-muted;
+}
+
 #palette-box, #branch-input-box {
     width: 50;
     height: auto;

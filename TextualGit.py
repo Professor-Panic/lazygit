@@ -9,6 +9,8 @@ from textual.message import Message
 from git_checker import *
 from sprint_todo import SprintTodo, SprintTodoError
 import asyncio
+from pathlib import Path
+from file_picker import FilePickerModal
 def build_diff_display(diff_text: str) -> Text:
     result = Text()
     for line in diff_text.splitlines(keepends=True):
@@ -81,6 +83,7 @@ class CommandPaletteModal(ModalScreen):
         ("l", "select_pull", "Pull"),
         ("p", "select_push", "Push"),
         ("t", "select_task_board", "Sprint board"),
+        ("f", "select_file", "Open file"),
         ("escape", "dismiss_modal", "Cancel"),
     ]
 
@@ -97,6 +100,7 @@ class CommandPaletteModal(ModalScreen):
                 ListItem(Label("l  Pull"), name="pull"),
                 ListItem(Label("p  Push"), name="push"),
                 ListItem(Label("t  Sprint board"), name="taskboard"),
+                ListItem(Label("f  Open file"), name="file"),
             ),
             id="palette-box"
         )
@@ -110,6 +114,9 @@ class CommandPaletteModal(ModalScreen):
         self.dismiss(("stash", None))
     def action_select_task_board(self):
         self.dismiss(("taskboard", None))
+
+    def action_select_file(self):
+        self.dismiss(("file", None))
 
     def action_select_switch(self):
         self.dismiss(("need_branch", "switch"))
@@ -191,6 +198,7 @@ class BranchSelectModal(ModalScreen):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.dismiss(event.item.name)
+
 
 class TaskItem(ListItem):
     """One task card on the sprint board. Right-click deletes it."""
@@ -840,6 +848,7 @@ class Repofy(App):
         ("c", "commit", "Commit code"),
         ("d", "toggle_dark", "Toggle dark mode"),
         ("t", "open_sprint_board", "Sprint board"),
+        ("f", "open_file_picker", "Open file"),
         (":", "open_palette", "Commands"),
         ("ctrl+x", "quit", "Quit"),
     ]
@@ -892,6 +901,23 @@ class Repofy(App):
             self.push_screen(BranchSelectModal(), handle_branch)
         else:
             self.push_screen(SprintBoardModal(self.todo))
+
+    async def action_open_file_picker(self):
+        self.push_screen(FilePickerModal(), self._show_selected_file)
+
+    async def _show_selected_file(self, selected_path: Path | None) -> None:
+        if selected_path is None:
+            return
+        try:
+            contents = selected_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            self.notify(f"Could not open {selected_path.name}: {error}", severity="error")
+            return
+        relative_path = selected_path.relative_to(Path.cwd())
+        diff_display = self.query_one(DiffDisplay)
+        await diff_display.remove_children()
+        diff_display.mount(Label(f"{relative_path}\n\n{contents}", markup=False))
+        diff_display.scroll_home(animate=False)
 
     async def action_open_palette(self):
         async def handle_choice(result) -> None:
@@ -947,6 +973,8 @@ class Repofy(App):
                 log_display.log("git push (done)", stdout, stderr, returncode)
             elif action == "taskboard":
                 self.push_screen(SprintBoardModal(self.todo))
+            elif action == "file":
+                self.push_screen(FilePickerModal(), self._show_selected_file)
 
         self.push_screen(CommandPaletteModal(), handle_choice)
 
