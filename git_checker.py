@@ -43,6 +43,17 @@ def getDiff(filename):
     capture_output=True,
     text=True)
     return result.stdout
+
+def getStagedDiff():
+     """Returns the diff of everything currently staged (git diff --cached),
+    across all files — this is what a commit message should describe."""
+     result = subprocess.run(
+         ["git", "diff", "--cached"],#instead of --staged to match getConflicts()
+         capture_output=True,
+         text=True
+     )
+     return result.stdout
+
 def doCommit(message):
     result = subprocess.run(
         ["git", "commit", "-m", message],
