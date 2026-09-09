@@ -178,7 +178,7 @@ def abortMerge():
     return result.stdout, result.stderr, result.returncode
 
 def continueMerge():
-    """Completes the merge after conflicts have been resolved and staged."""
+    #Continue the merge after conflicts have been resolved and staged.
     result = subprocess.run(
         ["git", "commit", "--no-edit"],
         capture_output=True,

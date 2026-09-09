@@ -23,7 +23,6 @@ def build_diff_display(diff_text: str) -> Text:
     return result
 class CommitModal(ModalScreen):
     BINDINGS = [("escape", "dismiss_modal", "Cancel")]
-
     def compose(self) -> ComposeResult:
         yield Container(
             Label("Commit message:"),

@@ -1,47 +1,13 @@
-#!/usr/bin/env python3
-"""
-Manage a git-synced sprint TODO.md, safely, from multiple people at once.
-
-How the syncing works, in plain terms
---------------------------------------
-This tool needs to read and write TODO.md on a shared branch (usually
-`main`) without disturbing whatever *you* currently have checked out or
-staged in your own working directory. The trick it uses is a
-`git worktree`: a second, independent checkout of the same repository,
-living in a throwaway temp folder. It's not a special git concept beyond
-that -- once it exists, this script just runs completely ordinary commands
-in it: `git add`, `git commit`, `git push`.
-
-The steps, every time you push a change:
-  1. `git fetch` + check out the branch into the scratch worktree.
-  2. Write the updated TODO.md there.
-  3. `git add` + `git commit` it, like you would by hand.
-  4. `git push`. If nobody else has pushed since step 1, this just works.
-  5. If someone *did* push in between, git rejects the push (the normal
-     "non-fast-forward" error you get any time two people push at once).
-     When that happens, we throw away our local commit, `git fetch` +
-     `git reset --hard` onto the new remote tip, redo our edits on top of
-     that, and try pushing again.
-
-That retry loop is the only "clever" part left, and it's really just:
-"if push fails because someone beat me to it, catch up and try again."
-"""
-import argparse
 import os
 import re
-import shutil
 import subprocess
-import sys
-import tempfile
-from pathlib import Path
+import time
 from datetime import date
 
 REJECTION_MARKERS = ("[rejected]", "non-fast-forward", "fetch first", "stale info")
 
-
 class SprintTodoError(Exception):
     pass
-
 
 class SprintTodo:
     INDEX_RE = re.compile(r"^\s*(\d+)\.\s+(.*\S)\s*$")
@@ -49,34 +15,37 @@ class SprintTodo:
     TASKS_MARK = "## Tasks"
 
     def __init__(self, filename="TODO.md", repo_dir="."):
-        self.repo_dir = Path(repo_dir).resolve()
+        self.repo_dir = os.path.realpath(repo_dir)
         self.filename = filename
-        self.indices = {}   # {int: name}
-        self.tasks = []     # [{num, description, flag, deadline, started, completed}]
-        self._pending_ops = []     # [(method_name, args, kwargs), ...] since last pull/push
-        self.main_branch = None    # set by _load_or_detect_main_branch()
-        self._worktree_dir = None  # path to our scratch checkout, once pull()/push() has run
+        self.indices = {} 
+        self.tasks = []
+        self._pending_ops = []
+        self.main_branch = None
+        self._worktree_dir = None
 
         self._load_or_detect_main_branch()
 
     # ---------------- main branch management ----------------
-
-    def _config_file_path(self) -> Path:
-        return self.repo_dir / ".sprint_todo_branch"
-
-    def _load_main_branch_from_config(self) -> str | None:
-        cfg = self._config_file_path()
-        if cfg.exists():
-            branch = cfg.read_text(encoding="utf-8").strip()
+    def _config_file_path(self) -> str:
+        #Save this to avoid re-detecting main branch everytime we run repofy 
+        return os.path.join(self.repo_dir, ".sprint_todo_branch")
+    
+    def _load_main_branch_from_config(self):
+        cfg_path = self._config_file_path()
+        #if the branch exists load it and remove whitespace
+        if os.path.exists(cfg_path):
+            with open(cfg_path, encoding="utf-8") as f:
+                branch = f.read().strip()
             if branch:
                 return branch
         return None
 
     def _save_main_branch(self, branch: str) -> None:
-        self._config_file_path().write_text(branch + "\n", encoding="utf-8")
+        with open(self._config_file_path(), "w", encoding="utf-8") as f:
+            f.write(branch + "\n")
 
     def detect_main_branch(self) -> str | None:
-        """Try to find a remote branch named 'main' or 'master'."""
+        #Try to find a remote branch named 'main' or 'master'.
         for candidate in ("main", "master"):
             try:
                 self._git("ls-remote", "--exit-code", "--heads", "origin", candidate)
@@ -101,12 +70,7 @@ class SprintTodo:
         self.main_branch = branch
         self._save_main_branch(branch)
 
-    # ---------------- basic git wrapper ----------------
-    # Every git call in this file, from here down, is a command you could
-    # type yourself at a terminal -- fetch, checkout, add, commit, push,
-    # reset. Nothing operates below that (no hash-object/commit-tree/
-    # custom index files).
-
+    # Basic wrapper for git.
     def _git(self, *args, cwd=None, input=None):
         result = subprocess.run(
             ["git", *args],
@@ -126,28 +90,22 @@ class SprintTodo:
             return None
 
     # ---------------- the scratch worktree ----------------
-
     def _new_scratch_path(self) -> str:
-        # mkdtemp() reserves a guaranteed-unique directory name for us;
-        # we immediately delete it because `git worktree add` wants to
-        # create that directory itself, not find it already there.
-        path = tempfile.mkdtemp(prefix="sprint_todo_")
-        shutil.rmtree(path)
-        return path
+        unique = str(time.time())
+        return os.path.join(self.repo_dir, f".sprint_todo_worktree_{unique}")
 
     def _ensure_worktree(self):
         """Make sure we have a private checkout of main_branch to work in.
         Reuses the existing one if pull() or push() already set one up
         earlier in this run."""
-        if self._worktree_dir and Path(self._worktree_dir).exists():
+        if self._worktree_dir and os.path.exists(self._worktree_dir):
             return
         if not self.main_branch:
-            raise SprintTodoError("Main branch not set. Use set_main_branch() first.")
-
+            raise Exception("Main branch not set. Use set_main_branch() first.")
+    
         self._git("fetch", "origin", self.main_branch)
         path = self._new_scratch_path()
         remote_ref = f"origin/{self.main_branch}"
-
         if self._rev_parse(remote_ref):
             self._git("worktree", "add", "--detach", path, remote_ref)
         else:
@@ -177,16 +135,18 @@ class SprintTodo:
         object (main() below does this in a finally block)."""
         self._release_worktree()
 
-    def _file_in_worktree(self) -> Path:
-        return Path(self._worktree_dir) / self.filename
+    def _file_in_worktree(self) -> str:
+        return os.path.join(self._worktree_dir, self.filename)
 
     def _reload_from_worktree(self):
-        f = self._file_in_worktree()
-        text = f.read_text(encoding="utf-8") if f.exists() else ""
+        file_path = self._file_in_worktree()
+        if os.path.exists(file_path):
+            with open(file_path, encoding="utf-8") as f:
+                text = f.read()
+        else:
+            text = ""
         self._load_text(text)
         self._pending_ops = []
-
-    # ---------------- pull / push ----------------
 
     def pull(self):
         """Set up (or refresh) our scratch checkout and load TODO.md from
@@ -194,13 +154,14 @@ class SprintTodo:
         self._ensure_worktree()
         self._reload_from_worktree()
 
-    def push(self, message="Update sprint TODO", max_retries=5):
-        """Write the in-memory state back to TODO.md, commit it, and push.
-        If someone else pushed first, catch up and retry."""
+    def push(self, message="Update Tasks.md", max_retries=5):
+        #ensure a worktree exists
         self._ensure_worktree()
-
         for attempt in range(max_retries + 1):
-            self._file_in_worktree().write_text(self._render_text(), encoding="utf-8")
+            file_path = self._file_in_worktree()
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(self._render_text())
+
             self._git("add", self.filename, cwd=self._worktree_dir)
 
             # If our edits landed back on exactly what's already
@@ -249,7 +210,6 @@ class SprintTodo:
         self.tasks = []
         if self.HEADER_MARK not in text or self.TASKS_MARK not in text:
             return
-
         idx_block = text.split(self.HEADER_MARK, 1)[1].split(self.TASKS_MARK, 1)[0]
         for line in idx_block.splitlines():
             m = self.INDEX_RE.match(line)
@@ -372,7 +332,6 @@ class SprintTodo:
             "deadline": deadline, "started": None, "completed": None,
         })
         return num
-
     def _get_task(self, task_num):
         for t in self.tasks:
             if t["num"] == task_num:
@@ -412,90 +371,5 @@ class SprintTodo:
     def set_deadline(self, task_num, deadline):
         self._record("set_deadline", (task_num, deadline), {})
         self._apply_set_deadline(task_num, deadline)
-
     def _apply_set_deadline(self, task_num, deadline):
         self._get_task(task_num)["deadline"] = deadline
-
-
-def _build_parser():
-    p = argparse.ArgumentParser(description="Manage a git-synced sprint TODO.md")
-    p.add_argument("--file", default="TODO.md")
-    p.add_argument("--repo", default=".")
-    sub = p.add_subparsers(dest="cmd", required=True)
-
-    a = sub.add_parser("add-task"); a.add_argument("description")
-    a.add_argument("--flag", type=int, default=1); a.add_argument("--deadline", default=None)
-
-    a = sub.add_parser("delete-task"); a.add_argument("num", type=int)
-
-    a = sub.add_parser("rename-task"); a.add_argument("num", type=int); a.add_argument("description")
-
-    a = sub.add_parser("set-flag"); a.add_argument("num", type=int); a.add_argument("flag", type=int)
-
-    a = sub.add_parser("set-deadline"); a.add_argument("num", type=int); a.add_argument("deadline")
-
-    a = sub.add_parser("add-index"); a.add_argument("name"); a.add_argument("--position", type=int, default=None)
-
-    a = sub.add_parser("delete-index"); a.add_argument("num", type=int); a.add_argument("--reassign", type=int, default=None)
-
-    a = sub.add_parser("rename-index"); a.add_argument("num", type=int); a.add_argument("name")
-
-    a = sub.add_parser("sync"); a.add_argument("-m", "--message", default="Update sprint TODO")
-
-    a = sub.add_parser("set-main-branch"); a.add_argument("branch")
-
-    return p
-
-
-def main():
-    args = _build_parser().parse_args()
-    todo = SprintTodo(args.file, args.repo)
-
-    try:
-        if args.cmd == "set-main-branch":
-            todo.set_main_branch(args.branch)
-            print(f"Main branch set to '{args.branch}'")
-            return
-
-        if not todo.main_branch:
-            print(
-                "Error: could not auto-detect main branch (tried 'main' and 'master').\n"
-                "Please set it manually with:\n"
-                "  python sprint_todo.py set-main-branch <branch-name>\n",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        todo.pull()
-
-        if args.cmd == "add-task":
-            print(f"Added task {todo.add_task(args.description, args.flag, args.deadline)}")
-        elif args.cmd == "delete-task":
-            todo.delete_task(args.num)
-        elif args.cmd == "rename-task":
-            todo.rename_task(args.num, args.description)
-        elif args.cmd == "set-flag":
-            todo.set_flag(args.num, args.flag)
-        elif args.cmd == "set-deadline":
-            todo.set_deadline(args.num, args.deadline)
-        elif args.cmd == "add-index":
-            todo.add_index(args.name, args.position)
-        elif args.cmd == "delete-index":
-            todo.delete_index(args.num, args.reassign)
-        elif args.cmd == "rename-index":
-            todo.rename_index(args.num, args.name)
-        elif args.cmd == "sync":
-            pass  # already pulled above
-
-        todo.push(f"{args.cmd} via sprint_todo.py" if args.cmd != "sync" else args.message)
-        print("Pushed.")
-    finally:
-        todo.close()
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except SprintTodoError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
